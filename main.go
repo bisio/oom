@@ -103,7 +103,7 @@ func printMemory() {
 	pctMemFree := float64(globalState.memoryInfo["MemAvailable"]) / float64(globalState.memoryInfo["MemTotal"]) * 100
 	pctSwapFree := float64(globalState.memoryInfo["SwapFree"]) / float64(globalState.memoryInfo["SwapTotal"]) * 100
 	t := time.Now()
-	fmt.Printf("%s mem avail: %d of %d Mib (%2.0f %%), swap free: %d of %d Mib (%2.0f %%) \n",
+	fmt.Printf("%s mem avail: %d of %d Mib (%2.0f%%), swap free: %d of %d Mib (%2.0f%%) \n",
 		t.Format("15:04:05"),
 		globalState.memoryInfo["MemAvailable"]/1000,
 		globalState.memoryInfo["MemTotal"]/1000,
@@ -140,6 +140,14 @@ func isOurProcess(procEntry os.FileInfo) (bool, error) {
 		return true, nil
 	}
 	return false, nil
+}
+
+func printHeader() {
+	fmt.Printf("Memory threshold: %d%%  Ignoring adj: %v   Simulating: %v  Verbose: %v    \n",
+		*globalState.threshold,
+		*globalState.ignoreAdj,
+		*globalState.simulate,
+		*globalState.verbose)
 }
 
 func readProcessInfo(procEntry os.FileInfo) (processInfo, error) {
@@ -240,6 +248,7 @@ func main() {
 		screen.MoveTopLeft()
 
 		updateMemory()
+		printHeader()
 		printMemory()
 		checkAndAct()
 

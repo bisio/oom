@@ -19,16 +19,6 @@ import (
 	"github.com/inancgumus/screen"
 )
 
-var memoryInfo map[string]int
-
-var currentUID int
-
-var threshold *int
-
-var ignoreAdj *bool
-
-var prefer *string
-
 type processInfo struct {
 	name    string
 	memory  int
@@ -36,13 +26,16 @@ type processInfo struct {
 	pid     int
 }
 
-var processes []processInfo
-
-func check(e error) {
-	if e != nil {
-		panic(e)
-	}
+type globalStateType struct {
+	memoryInfo map[string]int
+	currentUID int
+	threshold  *int
+	ignoreAdj  *bool
+	prefer     *string
+	processes  []processInfo
 }
+
+var globalState globalStateType
 
 func readValue(procID string, filename string, label string, field int, sep byte) (string, error) {
 	f, e := os.Open("/proc/" + procID + "/" + filename)
@@ -65,7 +58,7 @@ func readValue(procID string, filename string, label string, field int, sep byte
 }
 
 func inspectProcesses() {
-	processes = processes[0:0]
+	globalState.processes = globalState.processes[0:0]
 	entries, _ := ioutil.ReadDir("/proc")
 	for _, entry := range entries {
 		isProcess, _ := regexp.MatchString(`\d+`, entry.Name())
@@ -80,38 +73,40 @@ func inspectProcesses() {
 			if processInfoErr != nil {
 				continue
 			}
-			processes = append(processes, processInfo)
+			globalState.processes = append(globalState.processes, processInfo)
 		}
 	}
-	sort.Slice(processes, func(i, j int) bool {
-		return processes[i].badness > processes[j].badness
+	sort.Slice(globalState.processes, func(i, j int) bool {
+		return globalState.processes[i].badness > globalState.processes[j].badness
 	})
 
 }
 
 func dumpHogs() {
 	for i := 0; i < 5; i++ {
-		fmt.Printf("%s  %d  %d\n", processes[i].name, processes[i].badness, processes[i].memory)
+		fmt.Printf("%s  %d  %d\n",
+			globalState.processes[i].name,
+			globalState.processes[i].badness,
+			globalState.processes[i].memory)
 	}
 }
 
 func printMemory() {
-	pctMemFree := float64(memoryInfo["MemAvailable"]) / float64(memoryInfo["MemTotal"]) * 100
-	pctSwapFree := float64(memoryInfo["SwapFree"]) / float64(memoryInfo["SwapTotal"]) * 100
+	pctMemFree := float64(globalState.memoryInfo["MemAvailable"]) / float64(globalState.memoryInfo["MemTotal"]) * 100
+	pctSwapFree := float64(globalState.memoryInfo["SwapFree"]) / float64(globalState.memoryInfo["SwapTotal"]) * 100
 	t := time.Now()
 	fmt.Printf("%s mem avail: %d of %d Mib (%2.0f %%), swap free: %d of %d Mib (%2.0f %%) \n",
 		t.Format("15:04:05"),
-		memoryInfo["MemAvailable"]/1000,
-		memoryInfo["MemTotal"]/1000,
+		globalState.memoryInfo["MemAvailable"]/1000,
+		globalState.memoryInfo["MemTotal"]/1000,
 		pctMemFree,
-		memoryInfo["SwapFree"]/1000,
-		memoryInfo["SwapTotal"]/1000,
+		globalState.memoryInfo["SwapFree"]/1000,
+		globalState.memoryInfo["SwapTotal"]/1000,
 		pctSwapFree)
 }
 
 func updateMemory() {
-	f, e := os.Open("/proc/meminfo")
-	check(e)
+	f, _ := os.Open("/proc/meminfo")
 	reader := bufio.NewReader(f)
 	for {
 		line, err := reader.ReadString('\n')
@@ -120,7 +115,7 @@ func updateMemory() {
 		}
 		pieces := strings.Fields(line)
 		size, _ := strconv.Atoi(pieces[1])
-		memoryInfo[pieces[0][:len(pieces[0])-1]] = size
+		globalState.memoryInfo[pieces[0][:len(pieces[0])-1]] = size
 	}
 	f.Close()
 }
@@ -133,7 +128,7 @@ func isOurProcess(procEntry os.FileInfo) (bool, error) {
 	}
 
 	uid, _ := strconv.Atoi(value)
-	if uid == currentUID {
+	if uid == globalState.currentUID {
 		return true, nil
 	}
 	return false, nil
@@ -156,7 +151,7 @@ func readProcessInfo(procEntry os.FileInfo) (processInfo, error) {
 	}
 
 	badness, _ := strconv.Atoi(badnessAsString)
-	if *ignoreAdj {
+	if *globalState.ignoreAdj {
 		oomAdjAsString, oomAdjErr := readValue(procEntry.Name(), "oom_score_adj", "", 0, '\n')
 
 		if oomAdjErr != nil {
@@ -192,14 +187,14 @@ func killAndNotify(process processInfo) {
 }
 
 func checkAndAct() {
-	pctMemFree := float64(memoryInfo["MemAvailable"]) / float64(memoryInfo["MemTotal"]) * 100
-	if int(pctMemFree) < *threshold {
+	pctMemFree := float64(globalState.memoryInfo["MemAvailable"]) / float64(globalState.memoryInfo["MemTotal"]) * 100
+	if int(pctMemFree) < *globalState.threshold {
 		fmt.Printf("ready to kill!\n")
 		inspectProcesses()
-		if *prefer != "" {
+		if *globalState.prefer != "" {
 			fmt.Printf("trying to kill preferred\n")
-			for _, process := range processes {
-				if strings.Index(process.name, *prefer) != -1 {
+			for _, process := range globalState.processes {
+				if strings.Index(process.name, *globalState.prefer) != -1 {
 					fmt.Printf("found process %s with pid  %d\n", process.name, process.pid)
 					killAndNotify(process)
 					return
@@ -209,22 +204,22 @@ func checkAndAct() {
 			fmt.Printf("preferred not found\n")
 		}
 		fmt.Printf("going for the first of list\n")
-		fmt.Printf("process %s with pid %d", processes[0].name, processes[0].pid)
-		killAndNotify(processes[0])
+		fmt.Printf("process %s with pid %d", globalState.processes[0].name, globalState.processes[0].pid)
+		killAndNotify(globalState.processes[0])
 	}
 
 }
 
 func main() {
 
-	memoryInfo = make(map[string]int)
-	processes = make([]processInfo, 0, 100)
+	globalState.memoryInfo = make(map[string]int)
+	globalState.processes = make([]processInfo, 0, 100)
 	currentUser, _ := user.Current()
 	uid, _ := strconv.Atoi(currentUser.Uid)
-	currentUID = uid
-	ignoreAdj = flag.Bool("i", false, "ignore oom_adj")
-	threshold = flag.Int("t", 0, "available memory threshold in pct")
-	prefer = flag.String("p", "", "Preferred process name to kill")
+	globalState.currentUID = uid
+	globalState.ignoreAdj = flag.Bool("i", false, "ignore oom_adj")
+	globalState.threshold = flag.Int("t", 0, "available memory threshold in pct")
+	globalState.prefer = flag.String("p", "", "Preferred process name to kill")
 
 	flag.Parse()
 	for {

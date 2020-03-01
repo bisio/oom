@@ -28,11 +28,12 @@ type processInfo struct {
 
 type globalStateType struct {
 	memoryInfo map[string]int
+	processes  []processInfo
 	currentUID int
 	threshold  *int
 	ignoreAdj  *bool
 	prefer     *string
-	processes  []processInfo
+	simulate   *bool
 }
 
 var globalState globalStateType
@@ -65,12 +66,14 @@ func inspectProcesses() {
 		ourProcess, err := isOurProcess(entry)
 
 		if err != nil {
+			fmt.Println(err)
 			continue
 		}
 
 		if entry.IsDir() && isProcess && ourProcess {
 			processInfo, processInfoErr := readProcessInfo(entry)
 			if processInfoErr != nil {
+				fmt.Println(processInfoErr)
 				continue
 			}
 			globalState.processes = append(globalState.processes, processInfo)
@@ -178,6 +181,9 @@ func readProcessInfo(procEntry os.FileInfo) (processInfo, error) {
 }
 
 func killAndNotify(process processInfo) {
+	if *globalState.simulate {
+		return
+	}
 	syscall.Kill(process.pid, 9)
 	message := fmt.Sprintf("killed process %s with pid %d", process.name, process.pid)
 	fmt.Printf("%s\n", message)
@@ -220,6 +226,7 @@ func main() {
 	globalState.ignoreAdj = flag.Bool("i", false, "ignore oom_adj")
 	globalState.threshold = flag.Int("t", 0, "available memory threshold in pct")
 	globalState.prefer = flag.String("p", "", "Preferred process name to kill")
+	globalState.simulate = flag.Bool("s", false, "simulate killing")
 
 	flag.Parse()
 	for {

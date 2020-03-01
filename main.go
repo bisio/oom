@@ -34,6 +34,7 @@ type globalStateType struct {
 	ignoreAdj  *bool
 	prefer     *string
 	simulate   *bool
+	verbose    *bool
 }
 
 var globalState globalStateType
@@ -41,7 +42,7 @@ var globalState globalStateType
 func readValue(procID string, filename string, label string, field int, sep byte) (string, error) {
 	f, e := os.Open("/proc/" + procID + "/" + filename)
 	if e != nil {
-		errMessage := fmt.Sprintf("Process %s has gone away", procID)
+		errMessage := fmt.Sprintf("Process %s has gone away\n", procID)
 		return "", errors.New(errMessage)
 	}
 
@@ -66,14 +67,18 @@ func inspectProcesses() {
 		ourProcess, err := isOurProcess(entry)
 
 		if err != nil {
-			fmt.Println(err)
+			if *globalState.verbose {
+				fmt.Println(err)
+			}
 			continue
 		}
 
 		if entry.IsDir() && isProcess && ourProcess {
 			processInfo, processInfoErr := readProcessInfo(entry)
 			if processInfoErr != nil {
-				fmt.Println(processInfoErr)
+				if *globalState.verbose {
+					fmt.Println(processInfoErr)
+				}
 				continue
 			}
 			globalState.processes = append(globalState.processes, processInfo)
@@ -185,7 +190,7 @@ func killAndNotify(process processInfo) {
 		return
 	}
 	syscall.Kill(process.pid, 9)
-	message := fmt.Sprintf("killed process %s with pid %d", process.name, process.pid)
+	message := fmt.Sprintf("killed process %s with pid %d\n", process.name, process.pid)
 	fmt.Printf("%s\n", message)
 	cmd := exec.Command("notify-send", "-u", "critical", "-i", "dialog-warning", "OOM", message)
 	cmd.Run()
@@ -210,7 +215,7 @@ func checkAndAct() {
 			fmt.Printf("preferred not found\n")
 		}
 		fmt.Printf("going for the first of list\n")
-		fmt.Printf("process %s with pid %d", globalState.processes[0].name, globalState.processes[0].pid)
+		fmt.Printf("process %s with pid %d\n", globalState.processes[0].name, globalState.processes[0].pid)
 		killAndNotify(globalState.processes[0])
 	}
 
@@ -227,6 +232,7 @@ func main() {
 	globalState.threshold = flag.Int("t", 0, "available memory threshold in pct")
 	globalState.prefer = flag.String("p", "", "Preferred process name to kill")
 	globalState.simulate = flag.Bool("s", false, "simulate killing")
+	globalState.verbose = flag.Bool("v", false, "verbose")
 
 	flag.Parse()
 	for {

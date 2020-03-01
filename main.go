@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"errors"
 	"flag"
 	"fmt"
 	"io/ioutil"
@@ -19,8 +20,6 @@ import (
 )
 
 var memoryInfo map[string]int
-
-var spaces *regexp.Regexp
 
 var currentUID int
 
@@ -45,9 +44,13 @@ func check(e error) {
 	}
 }
 
-func readValue(procID string, filename string, label string, field int, sep byte) string {
+func readValue(procID string, filename string, label string, field int, sep byte) (string, error) {
 	f, e := os.Open("/proc/" + procID + "/" + filename)
-	check(e)
+	if e != nil {
+		errMessage := fmt.Sprintf("Process %s has gone away", procID)
+		return "", errors.New(errMessage)
+	}
+
 	reader := bufio.NewReader(f)
 	var line string
 	for {
@@ -58,7 +61,7 @@ func readValue(procID string, filename string, label string, field int, sep byte
 	}
 	f.Close()
 	pieces := strings.Fields(line)
-	return pieces[field]
+	return pieces[field], nil
 }
 
 func inspectProcesses() {
@@ -66,17 +69,30 @@ func inspectProcesses() {
 	entries, _ := ioutil.ReadDir("/proc")
 	for _, entry := range entries {
 		isProcess, _ := regexp.MatchString(`\d+`, entry.Name())
-		if entry.IsDir() && isProcess && isOurProcess(entry) {
-			processes = append(processes, readProcessInfo(entry))
+		ourProcess, err := isOurProcess(entry)
+
+		if err != nil {
+			continue
+		}
+
+		if entry.IsDir() && isProcess && ourProcess {
+			processInfo, processInfoErr := readProcessInfo(entry)
+			if processInfoErr != nil {
+				continue
+			}
+			processes = append(processes, processInfo)
 		}
 	}
 	sort.Slice(processes, func(i, j int) bool {
 		return processes[i].badness > processes[j].badness
 	})
 
-	// for i := 0; i < 5; i++ {
-	// 	fmt.Printf("%s  %d  %d\n", processes[i].name, processes[i].badness, processes[i].memory)
-	// }
+}
+
+func dumpHogs() {
+	for i := 0; i < 5; i++ {
+		fmt.Printf("%s  %d  %d\n", processes[i].name, processes[i].badness, processes[i].memory)
+	}
 }
 
 func printMemory() {
@@ -109,30 +125,61 @@ func updateMemory() {
 	f.Close()
 }
 
-func isOurProcess(procEntry os.FileInfo) bool {
-	uid, _ := strconv.Atoi(readValue(procEntry.Name(), "status", "Uid", 1, '\n'))
-	if uid == currentUID {
-		return true
+func isOurProcess(procEntry os.FileInfo) (bool, error) {
+	value, err := readValue(procEntry.Name(), "status", "Uid", 1, '\n')
+
+	if err != nil {
+		return false, errors.New("Process has gone away")
 	}
-	return false
+
+	uid, _ := strconv.Atoi(value)
+	if uid == currentUID {
+		return true, nil
+	}
+	return false, nil
 }
 
-func readProcessInfo(procEntry os.FileInfo) processInfo {
+func readProcessInfo(procEntry os.FileInfo) (processInfo, error) {
 	var info processInfo
-	memory, _ := strconv.Atoi(readValue(procEntry.Name(), "status", "VmRSS", 1, '\n'))
+	memoryAsString, memoryErr := readValue(procEntry.Name(), "status", "VmRSS", 1, '\n')
+
+	if memoryErr != nil {
+		return processInfo{}, errors.New("Process has gone away")
+	}
+
+	memory, _ := strconv.Atoi(memoryAsString)
 	info.memory = memory
-	badness, _ := strconv.Atoi(readValue(procEntry.Name(), "oom_score", "", 0, '\n'))
+	badnessAsString, badnessErr := readValue(procEntry.Name(), "oom_score", "", 0, '\n')
+
+	if badnessErr != nil {
+		return processInfo{}, errors.New("Process has gone away")
+	}
+
+	badness, _ := strconv.Atoi(badnessAsString)
 	if *ignoreAdj {
-		oomAdj, _ := strconv.Atoi(readValue(procEntry.Name(), "oom_score_adj", "", 0, '\n'))
+		oomAdjAsString, oomAdjErr := readValue(procEntry.Name(), "oom_score_adj", "", 0, '\n')
+
+		if oomAdjErr != nil {
+			return processInfo{}, errors.New("Process has gone away")
+		}
+
+		oomAdj, _ := strconv.Atoi(oomAdjAsString)
 		if oomAdj > 0 {
 			badness -= oomAdj
 		}
 	}
 	info.badness = badness
-	name := readValue(procEntry.Name(), "cmdline", "", 0, 0)
+
+	name, nameErr := readValue(procEntry.Name(), "cmdline", "", 0, 0)
+
+	if nameErr != nil {
+		return processInfo{}, errors.New("Process has gone away")
+	}
+
 	info.name = strings.ReplaceAll(name, "\x00", "")
 	info.pid, _ = strconv.Atoi(procEntry.Name())
-	return info
+
+	return info, nil
 }
 
 func killAndNotify(process processInfo) {
@@ -175,7 +222,6 @@ func main() {
 	currentUser, _ := user.Current()
 	uid, _ := strconv.Atoi(currentUser.Uid)
 	currentUID = uid
-	spaces = regexp.MustCompile(`\s+`)
 	ignoreAdj = flag.Bool("i", false, "ignore oom_adj")
 	threshold = flag.Int("t", 0, "available memory threshold in pct")
 	prefer = flag.String("p", "", "Preferred process name to kill")
